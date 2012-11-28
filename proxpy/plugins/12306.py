@@ -1,8 +1,8 @@
 from http import * 
 
 def proxy_mangle_request(req):
-    if req is None :
-        return 
+    # if req is None :
+    #     return 
     host, port = req.getHost()
     if host.endswith("12306.cn") :
         # if req.getMethod() == HTTPRequest.METHOD_GET :
