@@ -114,7 +114,8 @@ class ProxyHandler(SocketServer.StreamRequestHandler):
             return
 
         # Delegate request to plugin
-        req = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_REQUEST, req.clone())
+        req, isTargetReq = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_REQUEST, req.clone()) 
+        # Only manage responses of target requests
 
         # if you need a persistent connection set the flag in order to save the status
         if req.isKeepAlive():
@@ -126,10 +127,10 @@ class ProxyHandler(SocketServer.StreamRequestHandler):
         host, port = ProxyState.getTargetHost(req)
         
         if req.getMethod() == HTTPRequest.METHOD_GET:
-            res = self.doGET(host, port, req)
+            res = self.doGET(host, port, req, isTargetReq)
             self.sendResponse(res)
         elif req.getMethod() == HTTPRequest.METHOD_POST:
-            res = self.doPOST(host, port, req)
+            res = self.doPOST(host, port, req, isTargetReq)
             self.sendResponse(res)
         elif req.getMethod() == HTTPRequest.METHOD_CONNECT:
             res = self.doCONNECT(host, port, req)
@@ -158,22 +159,28 @@ class ProxyHandler(SocketServer.StreamRequestHandler):
             proxystate.log.error("%s: %s:%d" % (e.__str__(), conn.host, conn.port))
             return False
 
-    def doGET(self, host, port, req):
+    def doGET(self, host, port, req, isTarget):
         conn = self.createConnection(host, port)
         if not self.doRequest(conn, "GET", req.getPath(), '', req.headers): return ''
         # Delegate response to plugin
         res = self._getresponse(conn)
-        res = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_RESPONSE, res.clone())
+        if res is None: 
+            return ""
+        if isTarget : # only manage responses of target requests
+            res = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_RESPONSE, res.clone())
         data = res.serialize()
         return data
 
-    def doPOST(self, host, port, req):
+    def doPOST(self, host, port, req, isTarget):
         conn = self.createConnection(host, port)
         params = urllib.urlencode(req.getParams(HTTPRequest.METHOD_POST))
         if not self.doRequest(conn, "POST", req.getPath(), params, req.headers): return ''
         # Delegate response to plugin
         res = self._getresponse(conn)
-        res = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_RESPONSE, res.clone())
+        if res is None :
+            return ""
+        if isTarget : # only manage responses of target requests
+            res = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_RESPONSE, res.clone())
         data = res.serialize()
         return data
 
@@ -268,6 +275,9 @@ class ProxyState:
         self.log        = Logger()
         self.history    = HttpHistory()
         self.redirect   = None
+
+        # ZY: tag for target response
+        self.isTarget = False
 
     @staticmethod
     def getTargetHost(req):
