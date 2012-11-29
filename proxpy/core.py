@@ -167,8 +167,9 @@ class ProxyHandler(SocketServer.StreamRequestHandler):
         if res is None: 
             return ""
         if isTarget : # only manage responses of target requests
-            res = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_RESPONSE, res.clone())
-        data = res.serialize()
+            data = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_RESPONSE, res.clone())
+        else :
+            data = res.serialize()
         return data
 
     def doPOST(self, host, port, req, isTarget):
@@ -180,8 +181,9 @@ class ProxyHandler(SocketServer.StreamRequestHandler):
         if res is None :
             return ""
         if isTarget : # only manage responses of target requests
-            res = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_RESPONSE, res.clone())
-        data = res.serialize()
+            data = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_RESPONSE, res.clone())
+        else :
+            data = res.serialize()
         return data
 
     def doCONNECT(self, host, port, req):

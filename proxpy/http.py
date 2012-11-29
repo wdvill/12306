@@ -24,6 +24,7 @@ import datetime
 import copy
 import urlparse
 import select
+import StringIO
 
 class HTTPUtil():
     @staticmethod
@@ -328,9 +329,10 @@ class HTTPResponse(HTTPMessage):
             s += self.body
         else:
             # FIXME: Make a single-chunk body
+            # unchunked = self.unchunkedBody()
             s += "%x" % len(self.body) + HTTPMessage.EOL
             s += self.body + HTTPMessage.EOL
-            s += HTTPMessage.EOL
+            # s += HTTPMessage.EOL
             s += "0" + HTTPMessage.EOL + HTTPMessage.EOL
 
         return s

@@ -2,6 +2,122 @@
 
 from http import * 
 from urlparse import *
+import zlib
+import gzip 
+import cStringIO
+
+from HTMLParser import HTMLParser
+from base64 import *
+import xml.etree.ElementTree as ET
+import sys, tty, termios
+
+class MyParser(HTMLParser) :
+    def __init__(self) :
+        self.page = "" 
+        HTMLParser.__init__(self) 
+
+    def handle_starttag(self, tag, attrs) :
+        if tag == "input":
+            adict = dict(attrs) 
+            if "name" in adict :
+                if adict["name"] == "tranData" :
+                    newOrder = ""
+                    
+                    print "Order found! Replace it with another order:"
+                    old_settings = termios.tcgetattr(sys.stdin)
+                    try :
+                        tty.setcbreak(sys.stdin.fileno())
+                        setting = termios.tcgetattr(sys.stdin)
+                        setting[3] = termios.ECHO
+                        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, setting)
+
+                        line = sys.stdin.readline()
+                        if line.strip()  == "" :
+                            self.page += self.get_starttag_text() 
+                            return 
+                        while line.strip() != "" :
+                            newOrder += line 
+                            line = sys.stdin.readline()
+                    finally :
+                        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+                    self.page += "<input" 
+                    for (n, v) in attrs :
+                        if n == "value" :
+                            self.page += " " + n + "=\"" + newOrder.strip() + "\"" 
+                        else :
+                            self.page += " " + n + "=\"" + v + "\""
+                    self.page += ">"
+                    # order = b64decode(adict["value"])
+                    # print "Order:" 
+                    # root = ET.fromstring(order)
+                    # for e in root.iter() :
+                    #     if e.tag == "merVAR" :
+                    #         print "\t%s: %s" % (e.tag, b64decode(e.text))
+                    #     else : 
+                    #         print "\t%s: %s" % (e.tag, e.text)
+                    return 
+                elif adict["name"] == "merSignMsg" :
+                    newSign = ""
+                    print "Sign found! Replace it with another sign:"
+                    old_settings = termios.tcgetattr(sys.stdin)
+                    try :
+                        tty.setcbreak(sys.stdin.fileno())
+                        setting = termios.tcgetattr(sys.stdin)
+                        setting[3] = termios.ECHO
+                        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, setting)
+
+                        line = sys.stdin.readline()
+                        while line.strip() != "" :
+                            newSign += line 
+                            line = sys.stdin.readline()
+                    finally :
+                        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+                    self.page += "<input"
+                    for (n, v) in attrs :
+                        if n == "value" :
+                            self.page += " " + n + "=\"" + newSign.strip() + "\"" 
+                        else :
+                            self.page += " " + n + "=\"" + v + "\""
+                    self.page += ">"
+                    # print "Signature:"
+                    # print adict["value"]
+                    return 
+        self.page += self.get_starttag_text() 
+        return 
+
+    def handle_endtag(self, tag) :
+        self.page += "</" + tag + ">"
+        return 
+
+    def handle_startendtag(self, tag, attrs):
+        # print "%s: %s" % (tag, attrs)
+        self.page += self.get_starttag_text() 
+        return 
+
+    def handle_data(self, data) :
+        self.page += data 
+        return 
+
+    def handle_entityref(self, name) :
+        self.page += "&" + name + ";"
+        return
+
+    def handle_decl(self, decl) :
+        self.page += "<!" + decl + ">"
+        return 
+
+    def handle_comment(self, comment) :
+        self.page += "<!--" + comment + "-->"
+        return 
+
+    def gzipPage(self) :
+        if self.page == "" :
+            return ""
+        buf = cStringIO.StringIO() 
+        zfile = gzip.GzipFile(mode="wb", fileobj=buf)
+        zfile.write(self.page) 
+        zfile.close()
+        return buf.getvalue()
 
 def seat_type(no) :
     if no == "0" :
@@ -16,6 +132,9 @@ def seat_type(no) :
         return "商务座"
     if no == "M" :
         return "一等座"
+    if no == "O" :
+        return "二等座"
+    return (no + ":未知座位")
 
 def proxy_mangle_request(req):
     isTargetReq = False
@@ -85,10 +204,38 @@ def proxy_mangle_request(req):
                                                         seat_type(reqParams[prefix+"_seat"])
                                                         )
                     i = i+1
+            elif action == "myOrderAction.do" and reqParams["method"] == "laterEpay":
+                isTargetReq = True 
+                print "Order sequence NO: %s" % reqParams["orderSequence_no"]
             # for (k, v) in req.getParams().items() : 
             #     print "\t %s = %s" % (k, v)
             print "************************************************************"
     return (req, isTargetReq)
 
 def proxy_mangle_response(res):
-    return res
+    data = cStringIO.StringIO(res.serialize())
+    newdata = "" 
+    line = data.readline() 
+    while line != HTTPMessage.EOL :
+        # print line
+        newdata += line
+        line = data.readline() 
+    newdata += line
+    if res.isChunked() :
+        chunklen = int(data.readline().strip(), 16)
+        # print "Chunk length: %d" % chunklen
+        chunk = data.read(chunklen)
+        page = zlib.decompress(chunk, 16+zlib.MAX_WBITS)
+        parser = MyParser() 
+        parser.feed(page) 
+        gzipPage = parser.gzipPage()
+        newdata += "%x" % len(gzipPage) + HTTPMessage.EOL
+        newdata += gzipPage + HTTPMessage.EOL
+        newdata += "0" + HTTPMessage.EOL + HTTPMessage.EOL
+    else : 
+        page = data.read()
+        parser = MyParser()
+        parser.feed(page) 
+        newdata += parser.page 
+    
+    return newdata
