@@ -21,7 +21,7 @@ def proxy_mangle_request(req):
             reqParams = req.getParams() 
             if action == "loginAction.do" and reqParams['method'] == 'login': 
                 print "User name: %s" % reqParams['loginUser.user_name'] 
-                print "Password: ******" % 
+                print "Password: ******" 
             elif action == "querySingleAction.do" and reqParams["method"] == "submutOrderRequest" :
                 print "Train NO: %s" % reqParams["station_train_code"]
                 print "From %s (%s) to %s (%s)" % (reqParams["from_station_telecode_name"],
