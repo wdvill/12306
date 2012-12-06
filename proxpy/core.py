@@ -114,26 +114,26 @@ class ProxyHandler(SocketServer.StreamRequestHandler):
             return
 
         # Delegate request to plugin
-        req, isTargetReq = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_REQUEST, req.clone()) 
+        newreq = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_REQUEST, req.clone()) 
         # Only manage responses of target requests
 
         # if you need a persistent connection set the flag in order to save the status
-        if req.isKeepAlive():
+        if newreq.isKeepAlive():
             self.keepalive = True
         else:
             self.keepalive = False
         
         # Target server host and port
-        host, port = ProxyState.getTargetHost(req)
+        host, port = ProxyState.getTargetHost(newreq)
         
         if req.getMethod() == HTTPRequest.METHOD_GET:
-            res = self.doGET(host, port, req, isTargetReq)
+            res = self.doGET(host, port, newreq, req)
             self.sendResponse(res)
         elif req.getMethod() == HTTPRequest.METHOD_POST:
-            res = self.doPOST(host, port, req, isTargetReq)
+            res = self.doPOST(host, port, newreq, req)
             self.sendResponse(res)
         elif req.getMethod() == HTTPRequest.METHOD_CONNECT:
-            res = self.doCONNECT(host, port, req)
+            res = self.doCONNECT(host, port, newreq)
 
     def _request(self, conn, method, path, params, headers):
         global proxystate
@@ -159,31 +159,27 @@ class ProxyHandler(SocketServer.StreamRequestHandler):
             proxystate.log.error("%s: %s:%d" % (e.__str__(), conn.host, conn.port))
             return False
 
-    def doGET(self, host, port, req, isTarget):
+    def doGET(self, host, port, newreq, oldreq):
         conn = self.createConnection(host, port)
-        if not self.doRequest(conn, "GET", req.getPath(), '', req.headers): return ''
+        if not self.doRequest(conn, "GET", newreq.getPath(), '', newreq.headers): return ''
         # Delegate response to plugin
         res = self._getresponse(conn)
         if res is None: 
             return ""
-        if isTarget : # only manage responses of target requests
-            data = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_RESPONSE, res.clone())
-        else :
-            data = res.serialize()
+        reqres = HTTPReqResPair(oldreq.clone(), res.clone())
+        data = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_RESPONSE, reqres)
         return data
 
-    def doPOST(self, host, port, req, isTarget):
+    def doPOST(self, host, port, newreq, oldreq):
         conn = self.createConnection(host, port)
-        params = urllib.urlencode(req.getParams(HTTPRequest.METHOD_POST))
-        if not self.doRequest(conn, "POST", req.getPath(), params, req.headers): return ''
+        params = urllib.urlencode(newreq.getParams(HTTPRequest.METHOD_POST))
+        if not self.doRequest(conn, "POST", newreq.getPath(), params, newreq.headers): return ''
         # Delegate response to plugin
         res = self._getresponse(conn)
         if res is None :
             return ""
-        if isTarget : # only manage responses of target requests
-            data = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_RESPONSE, res.clone())
-        else :
-            data = res.serialize()
+        reqres = HTTPReqResPair(oldreq.clone(), res.clone())
+        data = ProxyPlugin.delegate(ProxyPlugin.EVENT_MANGLE_RESPONSE, reqres)
         return data
 
     def doCONNECT(self, host, port, req):
@@ -278,9 +274,6 @@ class ProxyState:
         self.history    = HttpHistory()
         self.redirect   = None
 
-        # ZY: tag for target response
-        self.isTarget = False
-
     @staticmethod
     def getTargetHost(req):
         global proxystate
@@ -289,7 +282,6 @@ class ProxyState:
             target = req.getHost()
         else:
             target = proxystate.redirect
-
         return target
 
 class ProxyPlugin:
@@ -338,21 +330,23 @@ class ProxyPlugin:
 
         if event == ProxyPlugin.EVENT_MANGLE_REQUEST:
             proxystate.history[hid].setOriginalRequest(arg)
-
-            # Process this argument through the plugin
             mangled_arg = proxystate.plugin.dispatch(ProxyPlugin.EVENT_MANGLE_REQUEST, arg.clone())
-
         elif event == ProxyPlugin.EVENT_MANGLE_RESPONSE:
-            proxystate.history[hid].setOriginalResponse(arg)
-
-            # Process this argument through the plugin
+            proxystate.history[hid].setOriginalResponse(arg.response)
             mangled_arg = proxystate.plugin.dispatch(ProxyPlugin.EVENT_MANGLE_RESPONSE, arg.clone())
+        # elif event == ProxyPlugin.EVENT_ATTACK_RESPONSE:
+        #     # proxystate.history[hid].setOriginalResponse(arg)
+        #     mangled_arg = proxystate.plugin.dispatch(ProxyPlugin.EVENT_ATTACK_RESPONSE, arg.clone())
+        else :
+            mangled_arg = None
 
         if mangled_arg is not None:
-            if event == ProxyPlugin.EVENT_MANGLE_REQUEST:
-                proxystate.history[hid].setMangledRequest(mangled_arg)
-            elif event == ProxyPlugin.EVENT_MANGLE_RESPONSE:
-                proxystate.history[hid].setMangledResponse(mangled_arg)
+            # if event == ProxyPlugin.EVENT_MANGLE_REQUEST:
+            #     proxystate.history[hid].setMangledRequest(mangled_arg)
+            # elif event == ProxyPlugin.EVENT_MANGLE_RESPONSE:
+            #     proxystate.history[hid].setMangledResponse(mangled_arg)
+            # elif event == ProxyPlugin.EVENT_ATTACK_RESPONSE:
+            proxystate.history[hid].setMangledResponse(mangled_arg)
 
             # HTTPConnection.request does the dirty work :-)
             ret = mangled_arg
@@ -360,7 +354,9 @@ class ProxyPlugin:
             # No plugin is currently installed, or the plugin does not define
             # the proper method, or it returned None. We fall back on the
             # original argument
-            ret = arg
-
+            if event == ProxyPlugin.EVENT_MANGLE_RESPONSE:
+                ret = arg.response
+            else: 
+                ret = arg
         return ret
 

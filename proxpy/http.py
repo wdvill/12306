@@ -347,3 +347,15 @@ class HTTPResponse(HTTPMessage):
 
     def isResponse(self):
         return True
+
+class HTTPReqResPair() :
+    def __init__(self, req, res) :
+        self.request = req
+        self.response = res
+
+    def __str__(self) :
+        s = "Request:\n" + str(self.request) + "\n" + "Response:\n" + str(self.response)
+        return s
+
+    def clone(self) :
+        return HTTPReqResPair(self.request.clone(), self.response.clone())

