@@ -11,6 +11,7 @@ from sinorail import *
 def proxy_mangle_request(req):
     if is_12306(req):
         if req.getMethod() == HTTPRequest.METHOD_POST :
+            host, port = req.getHost()
             action = get_12306_action(req) 
             reqParams = req.getParams() 
             if action == "confirmPassengerAction.do" and reqParams["method"] == "payOrder" :
