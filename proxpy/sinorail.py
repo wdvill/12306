@@ -270,9 +270,9 @@ class RailHttpsParser(RailParser) :
         self.page += string.replace(data, "https://", "http://")
         return 
 
-class RailActiveParser(RailHttpsParser) :
+class RailActiveParser(RailParser) :
     def __init__(self) :
-        RailHttpsParser.__init__(self)
+        RailParser.__init__(self)
 
     def decodeOrder(self, rawOrder) :
         order = b64decode(rawOrder)
@@ -373,6 +373,7 @@ class RailActiveParser(RailHttpsParser) :
                 if self.parsedTabRows >= 2 : 
                     self.parsingPassenger = True 
 
-        self.page += string.replace(self.get_starttag_text(), "https://", "http://")
+        self.page += self.get_starttag_text()
+        #self.page += string.replace(self.get_starttag_text(), "https://", "http://")
         return 
 
