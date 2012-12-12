@@ -289,6 +289,9 @@ class RailActiveParser(RailHttpsParser) :
             if "name" in adict :
                 if adict["name"] == "tranData" :
                     print "Signed order found:"
+                    order = adict["value"]
+                    # print order
+                    # print order.replace("\r\n", "") 
                     self.decodeOrder(adict["value"])
                     newOrder = ""
                     print "Replace it with new order:"
@@ -303,9 +306,19 @@ class RailActiveParser(RailHttpsParser) :
                         if line.strip()  == "" :
                             self.page += self.get_starttag_text() 
                             return 
+                        block = "" 
                         while line.strip() != "" :
-                            newOrder += line 
+                            block += line
                             line = sys.stdin.readline()
+                        block = block.replace("\n", "").replace("\r", "").replace(" ", "") 
+                        br = 0
+                        while br < len(block) :
+                            newOrder += block[br:br+75] 
+                            br += 75
+                            if br < len(block) :
+                                newOrder += "\r\n"
+                        print "Replaced the order with: "
+                        print newOrder
                     finally :
                         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
                     self.page += "<input" 
@@ -329,9 +342,22 @@ class RailActiveParser(RailHttpsParser) :
                         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, setting)
 
                         line = sys.stdin.readline()
+                        if line.strip()  == "" :
+                            self.page += self.get_starttag_text() 
+                            return 
+                        block = "" 
                         while line.strip() != "" :
-                            newSign += line 
+                            block += line 
                             line = sys.stdin.readline()
+                        block = block.replace("\n", "").replace("\r", "").replace(" ", "") 
+                        br = 0
+                        while br < len(block) :
+                            newSign += block[br:br+75] 
+                            br += 75
+                            if br < len(block) :
+                                newSign += "\r\n"
+                        print "Replaced the signature with: "
+                        print newSign
                     finally :
                         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
                     self.page += "<input"

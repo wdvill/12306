@@ -2,7 +2,7 @@
 
 from http import * 
 from urlparse import *
-from cStringIO import StringIO
+import cStringIO 
 import zlib, string
 # import sys, tty, termios
 
@@ -56,7 +56,7 @@ def proxy_mangle_response(reqres):
         return res.serialize()
 
 def attack_response(res):
-    data = StringIO(res.serialize())
+    data = cStringIO.StringIO(res.serialize())
     line = data.readline() 
     newdata = line
     while line != HTTPMessage.EOL :
